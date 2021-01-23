@@ -1,4 +1,5 @@
 extern crate futures;
+extern crate libc;
 extern crate thrussh;
 extern crate thrussh_keys;
 extern crate tokio;
@@ -70,6 +71,12 @@ impl server::Handler for Server {
 
     fn pty_request(self, channel: ChannelId, term: &str, col_width: u32, row_height: u32, pix_width: u32, pix_height: u32, modes: &[(Pty, u32)], session: Session) -> Self::FutureUnit {
         println!("pty_request {}, {:?}", term, modes);
+        let (master, slave, name) = openpty::openpty(
+            None,
+            Some(&libc::winsize { ws_row: row_height as u16, ws_col: col_width as u16, ws_xpixel: pix_width as u16, ws_ypixel: pix_height as u16 }),
+            None,
+        ).expect("Creating pty failed");
+        println!("master: {:?} slave: {:?} name: {}", master, slave, name);
         self.finished(session)
     }
 
