@@ -4,6 +4,10 @@ extern crate thrussh;
 extern crate thrussh_keys;
 extern crate tokio;
 
+use std::fs::File;
+use std::io::Write;
+use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use thrussh::*;
@@ -19,7 +23,7 @@ async fn main() {
     config.keys.push(server_key);
     let config = Arc::new(config);
     let sh = Server {};
-    thrussh::server::run(config, "0.0.0.0:2222", sh).await;
+    thrussh::server::run(config, "0.0.0.0:2222", sh).await.expect("Run failed");
 }
 
 #[derive(Clone)]
@@ -71,17 +75,34 @@ impl server::Handler for Server {
 
     fn pty_request(self, channel: ChannelId, term: &str, col_width: u32, row_height: u32, pix_width: u32, pix_height: u32, modes: &[(Pty, u32)], session: Session) -> Self::FutureUnit {
         println!("pty_request {}, {:?}", term, modes);
-        let (master, slave, name) = openpty::openpty(
-            None,
+        let ends = nix::pty::openpty(
             Some(&libc::winsize { ws_row: row_height as u16, ws_col: col_width as u16, ws_xpixel: pix_width as u16, ws_ypixel: pix_height as u16 }),
             None,
         ).expect("Creating pty failed");
-        println!("master: {:?} slave: {:?} name: {}", master, slave, name);
+
+        println!("ends: {:?}", ends);
+
+        let child = Command::new("/bin/sh")
+            .stdin(unsafe { Stdio::from_raw_fd(ends.slave.as_raw_fd()) })
+            .stdout(unsafe { Stdio::from_raw_fd(ends.slave.as_raw_fd()) })
+            .stderr(unsafe { Stdio::from_raw_fd(ends.slave.as_raw_fd()) })
+            .spawn()
+            .expect("Failed to spawn process");
+        println!("Child: {:?}", child);
+
+        let mut output = unsafe { File::from_raw_fd(ends.master) };
+        write!(output, "touch /tmp/itworks\n").expect("Write failed");
+        output.flush().expect("Flush failed");
         self.finished(session)
     }
 
-    fn shell_request(self, channel: ChannelId, session: Session) -> Self::FutureUnit {
+    fn shell_request(self, _channel: ChannelId, session: Session) -> Self::FutureUnit {
         println!("shell_request");
+        self.finished(session)
+    }
+
+    fn exec_request(self, channel: ChannelId, data: &[u8], session: Session) -> Self::FutureUnit {
+        println!("exec_request {:?}", data);
         self.finished(session)
     }
 }
